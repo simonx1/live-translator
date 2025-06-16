@@ -702,11 +702,32 @@
                     'whisper-base': 'Xenova/whisper-base'                 // Original (slower)
                 };
                 
-                console.log('🤖 Loading translation model only - using Web Speech API for STT');
+                console.log('🤖 Loading translation model - checking device capabilities...');
                 
-                // Only load translation model - use Web Speech API for speech recognition
-                translator = await pipeline('translation', 'Xenova/nllb-200-distilled-600M');
-                whisperModel = 'web-speech-api'; // Marker to use Web Speech API
+                // Check if mobile device and use smaller model
+                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                const isLowMemory = navigator.deviceMemory && navigator.deviceMemory < 4; // Less than 4GB RAM
+                
+                let translationModel;
+                if (isMobile || isLowMemory) {
+                    console.log('🤖 Mobile/low-memory device detected, using lighter model...');
+                    try {
+                        // Try smaller model first for mobile
+                        translationModel = 'Xenova/nllb-200-distilled-1.3B';
+                        translator = await pipeline('translation', translationModel);
+                    } catch (error) {
+                        console.log('🤖 Fallback: Using even smaller model for mobile...');
+                        translationModel = 'Xenova/opus-mt-mul-en'; // Much smaller multilingual model
+                        translator = await pipeline('translation', translationModel);
+                    }
+                } else {
+                    console.log('🤖 Desktop device detected, using full model...');
+                    translationModel = 'Xenova/nllb-200-distilled-600M';
+                    translator = await pipeline('translation', translationModel);
+                }
+                
+                whisperModel = 'web-speech-api'; // Always use Web Speech API
+                console.log('🤖 Using translation model:', translationModel);
                 
                 
                 console.log('🤖 Models loaded successfully!');
@@ -719,23 +740,23 @@
                 console.error('Error stack:', error.stack);
                 hideModelLoading();
                 
-                // Try fallback to smaller model if Distil-Whisper fails
-                if (selectedModel && selectedModel.includes('distil')) {
-                    console.log('🔄 Distil-Whisper failed, trying Whisper-tiny as fallback...');
-                    try {
-                        const fallbackSpeechModel = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny');
-                        whisperModel = fallbackSpeechModel;
-                        updateStatus('⚠️ Using fallback model - ready for speech translation');
-                        showError('Distil-Whisper failed to load, using Whisper-tiny fallback.');
-                        return { translator, whisperModel };
-                    } catch (fallbackError) {
-                        console.error('Fallback model also failed:', fallbackError);
-                    }
+                // Mobile fallback: try speech recognition only mode
+                console.log('🔄 Translation model failed, trying speech-only mode for mobile...');
+                try {
+                    translator = 'no-translation'; // Marker for speech-only mode
+                    whisperModel = 'web-speech-api';
+                    updateStatus('⚠️ Speech recognition only - translation unavailable on this device');
+                    showError('Translation model failed to load. Using speech recognition only.');
+                    return { translator, whisperModel };
+                } catch (fallbackError) {
+                    console.error('Complete fallback failed:', fallbackError);
                 }
                 
-                showError(`AI models failed to load: ${error.message}. Please refresh the page to try again.`);
-                updateStatus('❌ AI models failed to load');
-                return { translator: null, whisperModel: null };
+                showError(`AI models failed to load: ${error.message}. Speech recognition may still work.`);
+                updateStatus('❌ AI translation unavailable - speech recognition only');
+                translator = 'no-translation';
+                whisperModel = 'web-speech-api';
+                return { translator, whisperModel };
             } finally {
                 isModelLoading = false;
             }
@@ -1054,10 +1075,20 @@
         }
 
         async function translateText(text, saveToHistory = true) {
-            if (!text.trim() || !translator) return;
-
+            if (!text.trim()) return;
+            
             const sourceLang = document.getElementById('sourceLang').value.split('-')[0];
             const targetLang = document.getElementById('targetLang').value.split('-')[0];
+            
+            // Handle no-translation mode (mobile fallback)
+            if (!translator || translator === 'no-translation') {
+                document.getElementById('translatedText').textContent = `[${sourceLang.toUpperCase()}] ${text}`;
+                if (saveToHistory) {
+                    addToHistory(text, `[Speech Recognition Only] ${text}`, sourceLang, sourceLang);
+                }
+                updateStatus(isListening ? '🎤 Listening... (speech recognition only)' : '✅ Speech captured (no translation)');
+                return;
+            }
             
             // Skip translation if source and target are the same
             if (sourceLang === targetLang) {
