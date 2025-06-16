@@ -681,7 +681,15 @@
             showModelLoading();
             updateStatus('🤖 Loading AI models... (this may take a moment)');
             
-            try {
+            // Set timeout for mobile devices
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            const timeout = isMobile ? 10000 : 25000; // 10s for mobile, 25s for desktop
+            
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Model loading timeout - using speech recognition only')), timeout);
+            });
+            
+            const modelLoadingPromise = (async () => {
                 console.log('🤖 Starting model initialization...');
                 
                 // Configure environment for remote model loading
@@ -690,49 +698,37 @@
                 
                 console.log('🤖 Environment configured, loading models...');
                 
-                // Choose the best speech model for your needs:
-                // Option 1: Moonshine (fastest, ~75ms latency, English only)
-                // Option 2: Distil-Whisper (6x faster than Whisper, multilingual)
-                // Option 3: Whisper-tiny (smallest, multilingual, slower)
-                
-                const speechModelOptions = {
-                    'moonshine': 'onnx-community/moonshine-base-ONNX',     // Fastest (English only)
-                    'distil': 'distil-whisper/distil-large-v2',           // 6x faster, multilingual (verified working)
-                    'whisper-tiny': 'Xenova/whisper-tiny',                // Smallest, multilingual
-                    'whisper-base': 'Xenova/whisper-base'                 // Original (slower)
-                };
-                
-                console.log('🤖 Loading translation model - checking device capabilities...');
-                
-                // Check if mobile device and use smaller model
-                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-                const isLowMemory = navigator.deviceMemory && navigator.deviceMemory < 4; // Less than 4GB RAM
-                
-                let translationModel;
-                if (isMobile || isLowMemory) {
-                    console.log('🤖 Mobile/low-memory device detected, using lighter model...');
-                    try {
-                        // Try smaller model first for mobile
-                        translationModel = 'Xenova/nllb-200-distilled-1.3B';
-                        translator = await pipeline('translation', translationModel);
-                    } catch (error) {
-                        console.log('🤖 Fallback: Using even smaller model for mobile...');
-                        translationModel = 'Xenova/opus-mt-mul-en'; // Much smaller multilingual model
-                        translator = await pipeline('translation', translationModel);
-                    }
-                } else {
-                    console.log('🤖 Desktop device detected, using full model...');
-                    translationModel = 'Xenova/nllb-200-distilled-600M';
-                    translator = await pipeline('translation', translationModel);
+                // For mobile, skip AI translation and use speech recognition only
+                if (isMobile) {
+                    console.log('🤖 Mobile device detected - using speech recognition only for better performance');
+                    translator = 'no-translation';
+                    whisperModel = 'web-speech-api';
+                    return { translator, whisperModel };
                 }
                 
-                whisperModel = 'web-speech-api'; // Always use Web Speech API
-                console.log('🤖 Using translation model:', translationModel);
+                console.log('🤖 Loading translation model for desktop...');
                 
+                // Desktop: load full translation model
+                const translationModel = 'Xenova/nllb-200-distilled-600M';
+                translator = await pipeline('translation', translationModel);
+                whisperModel = 'web-speech-api';
+                
+                console.log('🤖 Using translation model:', translationModel);
+                return { translator, whisperModel };
+            })();
+            
+            try {
+                const result = await Promise.race([modelLoadingPromise, timeoutPromise]);
                 
                 console.log('🤖 Models loaded successfully!');
                 hideModelLoading();
-                updateStatus('✅ AI models loaded! Ready for speech translation.');
+                
+                if (translator === 'no-translation') {
+                    updateStatus('✅ Speech recognition ready! (Translation unavailable on mobile)');
+                } else {
+                    updateStatus('✅ AI models loaded! Ready for speech translation.');
+                }
+                
                 return { translator, whisperModel };
             } catch (error) {
                 console.error('Model loading error:', error);
