@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Speech Translator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Real-time Speech Translator</h1>
+
+    <div class="controls">
+        <label for="source-lang">Speak in:</label>
+        <select id="source-lang">
+            <option value="en-US">English (US)</option>
+            <option value="pl-PL">Polish</option>
+            <option value="it-IT">Italian</option>
+        </select>
+
+        <label for="target-lang">Translate to:</label>
+        <select id="target-lang">
+            <option value="en-US">English (US)</option>
+            <option value="pl-PL">Polish</option>
+            <option value="it-IT">Italian</option>
+        </select>
+
+        <button id="start-stop-btn">Start Listening</button>
+    </div>
+
+    <div class="text-display">
+        <div class="text-box-container">
+            <h2>You Said (Source):</h2>
+            <div id="original-text" class="text-box" contenteditable="false">
+                <!-- Speech will appear here after listening -->
+            </div>
+        </div>
+        <div class="text-box-container">
+            <h2>Translated Text (Target):</h2>
+            <div id="translated-text" class="text-box" contenteditable="false">
+                Translation will appear here...
+            </div>
+        </div>
+    </div>
+
+    <div class="conversation-log-container">
+        <h2>Conversation Log:</h2>
+        <div id="conversation-log" class="text-box">
+            Conversation history will be shown here...
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

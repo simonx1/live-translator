@@ -1,0 +1,190 @@
+/* style.css */
+body {
+    font-family: sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+h1 {
+    text-align: center;
+    color: #333;
+}
+
+.controls {
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    display: flex;
+    flex-wrap: wrap; /* Allow items to wrap on smaller screens */
+    gap: 15px; /* Space between control items */
+    align-items: center;
+    justify-content: center;
+}
+
+.controls label {
+    margin-right: 5px;
+}
+
+.controls select,
+.controls button {
+    padding: 10px 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1em;
+}
+
+.controls button {
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.controls button:hover {
+    background-color: #0056b3;
+}
+
+.controls button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+.text-display {
+    display: flex;
+    gap: 20px; /* Space between the two text boxes */
+    width: 100%;
+    max-width: 800px; /* Max width for the text display area */
+    margin-bottom: 20px;
+}
+
+.text-box-container {
+    flex: 1; /* Each container takes equal width */
+    background-color: #fff;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.text-box-container h2 {
+    margin-top: 0;
+    font-size: 1.2em;
+    color: #555;
+}
+
+.text-box {
+    width: 100%; /* Take full width of container */
+    min-height: 100px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+    overflow-y: auto; /* Add scroll if content overflows */
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+}
+
+.text-box em { /* Styling for 'Listening...' or other interim messages */
+    color: #888;
+}
+
+.conversation-log-container {
+    width: 100%;
+    max-width: 800px; /* Consistent width with text display */
+    background-color: #fff; /* Changed background to white for contrast with entries */
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.conversation-log-container h2 {
+    margin-top: 0;
+    font-size: 1.2em;
+    color: #555;
+}
+
+/* Updated #conversation-log styles */
+#conversation-log {
+    max-height: 250px; /* Increased height */
+    overflow-y: auto;
+    border: 1px solid #ddd; /* Border for the main log container */
+    padding: 10px; /* Padding for the container itself */
+    border-radius: 4px;
+    background-color: #fff; /* White background for the log area */
+}
+
+/* Remove old #conversation-log p styling that might conflict */
+#conversation-log p {
+    all: unset; /* Reset properties from previous rule */
+    display: block; /* Make it behave like a p again if needed, but .log-entry p will handle it */
+}
+
+/* New styles for individual log entries */
+.log-entry {
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background-color: #f9f9f9; /* Light grey for each entry background */
+}
+
+.log-entry:last-child {
+    margin-bottom: 0; /* No margin for the last entry */
+}
+
+.log-entry p { /* Specificity for paragraphs within a log entry */
+    margin: 0;
+    padding: 3px 0; /* Spacing between original and translated lines */
+    line-height: 1.5;
+}
+
+.log-original {
+    font-weight: normal;
+    color: #333;
+}
+
+.log-original strong { /* "You (EN):" part */
+    color: #0056b3;
+}
+
+.log-translated {
+    font-weight: normal;
+    color: #28a745;
+}
+
+.log-translated strong { /* "Translation (to PL):" part */
+    color: #1e7e34;
+}
+
+/* Class for error text in log entries, applies to the span and potentially the strong tag within it */
+.error-text, .error-text strong {
+    color: #dc3545 !important; /* Red for errors */
+}
+.log-translated .error-text { /* Specifically for error messages in the translated part */
+     color: #dc3545 !important;
+}
+
+
+/* Basic responsiveness */
+@media (max-width: 600px) {
+    .controls {
+        flex-direction: column;
+        align-items: stretch; /* Make controls take full width */
+    }
+
+    .text-display {
+        flex-direction: column; /* Stack text boxes on small screens */
+    }
+
+    .controls select,
+    .controls button {
+        width: 100%; /* Make form elements take full width */
+        box-sizing: border-box;
+    }
+}
