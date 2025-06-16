@@ -455,9 +455,9 @@
 
     <div class="subtitle-area">
         <div class="subtitle-container" id="subtitleContainer">
-            <div class="original-text" id="originalText">Real-time voice capture • Click microphone to start</div>
+            <div class="original-text" id="originalText">AI speech translation • Click microphone to record</div>
             <div class="translated-text" id="translatedText">
-                Voice capture ready - AI translation loading...
+                AI speech translation loading...
             </div>
         </div>
     </div>
@@ -477,7 +477,7 @@
                 </button>
             </div>
         </div>
-        <div class="status" id="status">Loading AI translation model...</div>
+        <div class="status" id="status">Loading AI models...</div>
     </div>
 
     <button class="clear-log" onclick="clearLog()">🗑️ Clear Capture History</button>
@@ -500,15 +500,23 @@
         
         // Define global functions FIRST for onclick handlers
         let recognition;
+        let mediaRecorder;
+        let audioChunks = [];
+        let stream;
         let isListening = false;
         let currentTranscript = '';
         let translationTimeout;
         let conversationHistory = [];
         let finalTranscriptTimeout;
         let translator = null;
+        let whisperModel = null;
         let isModelLoading = false;
         let autoSpeak = false;
         let lastSpokenText = '';
+        let recordingTimeout;
+        let chunkProcessingInterval;
+        let isProcessingChunk = false;
+        let chunkCounter = 0;
 
         // Voice language mapping for text-to-speech
         const voiceLanguageMap = {
@@ -657,21 +665,21 @@
             speechSynthesis.speak(utterance);
         }
 
-        // Initialize translation model
-        async function initTranslationModel() {
-            if (translator || isModelLoading) return translator;
+        // Initialize models
+        async function initModels() {
+            if ((translator && whisperModel) || isModelLoading) return { translator, whisperModel };
             
             // Check if pipeline is available
             if (!pipeline || !env) {
                 console.error('❌ Xenova/transformers library not loaded');
                 showError('AI library not loaded. Please refresh the page.');
                 updateStatus('❌ AI library not loaded');
-                return null;
+                return { translator: null, whisperModel: null };
             }
             
             isModelLoading = true;
             showModelLoading();
-            updateStatus('🤖 Loading AI translation model... (this may take a moment)');
+            updateStatus('🤖 Loading AI models... (this may take a moment)');
             
             try {
                 console.log('🤖 Starting model initialization...');
@@ -680,30 +688,269 @@
                 env.allowRemoteModels = true;
                 env.allowLocalModels = false;
                 
-                console.log('🤖 Environment configured, loading pipeline...');
+                console.log('🤖 Environment configured, loading models...');
                 
-                // Simplified pipeline configuration - let the library choose optimal settings
+                // Choose the best speech model for your needs:
+                // Option 1: Moonshine (fastest, ~75ms latency, English only)
+                // Option 2: Distil-Whisper (6x faster than Whisper, multilingual)
+                // Option 3: Whisper-tiny (smallest, multilingual, slower)
+                
+                const speechModelOptions = {
+                    'moonshine': 'onnx-community/moonshine-base-ONNX',     // Fastest (English only)
+                    'distil': 'distil-whisper/distil-large-v2',           // 6x faster, multilingual (verified working)
+                    'whisper-tiny': 'Xenova/whisper-tiny',                // Smallest, multilingual
+                    'whisper-base': 'Xenova/whisper-base'                 // Original (slower)
+                };
+                
+                console.log('🤖 Loading translation model only - using Web Speech API for STT');
+                
+                // Only load translation model - use Web Speech API for speech recognition
                 translator = await pipeline('translation', 'Xenova/nllb-200-distilled-600M');
+                whisperModel = 'web-speech-api'; // Marker to use Web Speech API
                 
-                console.log('🤖 Translation model loaded successfully!');
+                
+                console.log('🤖 Models loaded successfully!');
                 hideModelLoading();
-                updateStatus('✅ AI translation model loaded! Ready to translate.');
-                return translator;
+                updateStatus('✅ AI models loaded! Ready for speech translation.');
+                return { translator, whisperModel };
             } catch (error) {
                 console.error('Model loading error:', error);
                 console.error('Error details:', error.message);
                 console.error('Error stack:', error.stack);
                 hideModelLoading();
-                showError(`AI model failed to load: ${error.message}. Please refresh the page to try again.`);
-                updateStatus('❌ AI model failed to load');
-                return null;
+                
+                // Try fallback to smaller model if Distil-Whisper fails
+                if (selectedModel && selectedModel.includes('distil')) {
+                    console.log('🔄 Distil-Whisper failed, trying Whisper-tiny as fallback...');
+                    try {
+                        const fallbackSpeechModel = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny');
+                        whisperModel = fallbackSpeechModel;
+                        updateStatus('⚠️ Using fallback model - ready for speech translation');
+                        showError('Distil-Whisper failed to load, using Whisper-tiny fallback.');
+                        return { translator, whisperModel };
+                    } catch (fallbackError) {
+                        console.error('Fallback model also failed:', fallbackError);
+                    }
+                }
+                
+                showError(`AI models failed to load: ${error.message}. Please refresh the page to try again.`);
+                updateStatus('❌ AI models failed to load');
+                return { translator: null, whisperModel: null };
             } finally {
                 isModelLoading = false;
             }
         }
 
-        // Initialize speech recognition
-        function initSpeechRecognition() {
+        // Initialize audio recording for Whisper
+        async function initAudioRecording() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    } 
+                });
+                
+                // Try different audio formats for better compatibility
+                let mimeType;
+                if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                    mimeType = 'audio/webm;codecs=opus';
+                } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                    mimeType = 'audio/mp4';
+                } else {
+                    mimeType = 'audio/webm';
+                }
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: mimeType,
+                    audioBitsPerSecond: 128000
+                });
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    // Process final chunk when stopped
+                    if (audioChunks.length > 0) {
+                        processAudioWithWhisper(true); // true = final chunk
+                    }
+                };
+                
+                return true;
+            } catch (error) {
+                console.error('Failed to initialize audio recording:', error);
+                showError('Microphone access denied or not available. Please allow microphone access and refresh.');
+                return false;
+            }
+        }
+        
+        // Process recorded audio with Whisper (streaming)
+        async function processAudioWithWhisper(isFinal = false) {
+            console.log('🎤 processAudioWithWhisper called, isFinal:', isFinal, 'audioChunks:', audioChunks.length, 'isProcessingChunk:', isProcessingChunk);
+            
+            if (!whisperModel || audioChunks.length === 0 || isProcessingChunk) {
+                console.log('🎤 Skipping processing - whisperModel:', !!whisperModel, 'audioChunks:', audioChunks.length, 'isProcessingChunk:', isProcessingChunk);
+                return;
+            }
+            
+            isProcessingChunk = true;
+            
+            try {
+                if (!isFinal) {
+                    updateStatus('🤖 Processing speech... (keep talking)');
+                } else {
+                    updateStatus('🤖 Processing final speech...');
+                }
+                
+                // Combine audio chunks into a blob
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                console.log('🎤 Created audio blob, size:', audioBlob.size, 'bytes');
+                
+                // Don't clear chunks unless it's the final processing
+                if (isFinal) {
+                    audioChunks = [];
+                }
+                
+                // Create URL for the blob
+                const audioUrl = URL.createObjectURL(audioBlob);
+                console.log('🎤 Created audio URL:', audioUrl);
+                
+                // Get source language for Whisper
+                const sourceLang = document.getElementById('sourceLang').value.split('-')[0];
+                console.log('🎤 Source language:', sourceLang);
+                
+                // Map language codes to Whisper's expected format
+                const whisperLanguageMap = {
+                    'en': 'english',
+                    'pl': 'polish',
+                    'it': 'italian', 
+                    'es': 'spanish',
+                    'fr': 'french',
+                    'de': 'german',
+                    'pt': 'portuguese',
+                    'ru': 'russian',
+                    'ja': 'japanese',
+                    'ko': 'korean',
+                    'zh': 'chinese'
+                };
+                
+                const whisperLang = whisperLanguageMap[sourceLang] || 'english';
+                console.log('🎤 Whisper language:', whisperLang);
+                
+                // Process with Whisper using the audio URL - fast processing
+                console.log('🎤 Starting Whisper processing...');
+                const result = await whisperModel(audioUrl, {
+                    language: whisperLang,
+                    return_timestamps: false,
+                    chunk_length_s: 15,
+                    stride_length_s: 2,
+                    num_beams: 1,
+                    temperature: 0.0
+                });
+                
+                // Clean up the object URL
+                URL.revokeObjectURL(audioUrl);
+                
+                const transcript = result.text.trim();
+                console.log('🎤 Whisper result:', result);
+                console.log('🎤 Whisper transcript (chunk):', transcript);
+                
+                if (transcript && transcript.length > 2) { // Lower threshold for faster response
+                    console.log('🎤 Valid transcript, updating UI and translating...');
+                    document.getElementById('originalText').textContent = transcript;
+                    currentTranscript = transcript;
+                    
+                    // Translate immediately for real-time feel (no debouncing for speed)
+                    translateText(transcript, isFinal); // Only save to history on final
+                    
+                    // Update status based on whether we're still recording
+                    if (isListening && !isFinal) {
+                        updateStatus('🎤 Listening... (real-time processing)');
+                    }
+                } else if (isFinal) {
+                    console.log('🎤 No valid transcript found');
+                    document.getElementById('originalText').textContent = 'No clear speech detected';
+                    updateStatus('🔇 No clear speech detected. Try speaking louder.');
+                }
+                
+            } catch (error) {
+                console.error('Whisper processing error:', error);
+                console.error('Error details:', error.message);
+                console.error('Error stack:', error.stack);
+                if (isFinal) {
+                    document.getElementById('originalText').textContent = 'Speech processing failed';
+                    updateStatus('❌ Speech processing failed');
+                }
+            } finally {
+                isProcessingChunk = false;
+            }
+        }
+        
+        // Process audio chunks periodically while recording
+        function startChunkProcessing() {
+            chunkProcessingInterval = setInterval(() => {
+                if (isListening && !isProcessingChunk && audioChunks.length >= 3) {
+                    // Process accumulated chunks so far (need at least 3 chunks for good results)
+                    processAudioWithWhisper(false); // false = intermediate chunk
+                }
+            }, 1500); // Process every 1.5 seconds for fast but stable response
+        }
+        
+        function stopChunkProcessing() {
+            if (chunkProcessingInterval) {
+                clearInterval(chunkProcessingInterval);
+                chunkProcessingInterval = null;
+            }
+        }
+
+        async function startListening() {
+            console.log('🎤 Start button clicked');
+            console.log('🤖 Translator loaded:', !!translator);
+            console.log('🤖 Using Web Speech API for recognition');
+            
+            if (!translator) {
+                console.error('❌ Translation model not ready');
+                showError('AI translation model not loaded. Please wait for it to load or refresh the page.');
+                updateStatus('❌ Translation model not ready');
+                return;
+            }
+            
+            // Use Web Speech API instead of audio recording
+            if (!initWebSpeechRecognition()) {
+                return;
+            }
+            
+            const sourceLang = document.getElementById('sourceLang').value;
+            recognition.lang = sourceLang;
+            
+            try {
+                recognition.start();
+                isListening = true;
+                
+                const button = document.getElementById('controlButton');
+                button.innerHTML = '<div class="mic-icon">🛑</div><div>Stop</div>';
+                button.classList.remove('start');
+                button.classList.add('stop', 'listening');
+                
+                document.getElementById('originalText').textContent = 'Listening...';
+                document.getElementById('translatedText').textContent = 'Speak now for real-time translation';
+                
+                updateStatus('🎤 Listening... Speak now!');
+                
+            } catch (e) {
+                console.error('Failed to start recognition:', e);
+                showError('🚫 Failed to start voice recognition. Please ensure microphone access is allowed.');
+            }
+        }
+        
+        // Initialize Web Speech Recognition (fast and reliable)
+        function initWebSpeechRecognition() {
             if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
                 showError('Voice recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
                 return false;
@@ -717,7 +964,7 @@
             recognition.maxAlternatives = 1;
             
             recognition.onstart = () => {
-                console.log('🎤 Voice recognition started');
+                console.log('🎤 Web Speech recognition started');
                 updateStatus('🎤 Listening... Speak now!');
             };
 
@@ -739,20 +986,14 @@
                 if (displayText.trim()) {
                     document.getElementById('originalText').textContent = displayText;
                     
-                    // Clear previous timeout only for interim results
-                    if (interimTranscript && !finalTranscript) {
-                        clearTimeout(translationTimeout);
-                        // Very short delay for instant feel while avoiding too many API calls
-                        translationTimeout = setTimeout(() => {
-                            currentTranscript = interimTranscript;
-                            translateText(interimTranscript, false); // false = don't save to history yet
-                        }, 300); // Reduced from 1000ms to 300ms for near-instant translation
-                    } else if (finalTranscript.trim()) {
-                        // Immediate translation for final results
-                        clearTimeout(translationTimeout);
-                        currentTranscript = finalTranscript;
-                        translateText(finalTranscript, true); // true = save to history
-                    }
+                    // Clear previous timeout
+                    clearTimeout(translationTimeout);
+                    
+                    // Translate with short delay for real-time feel
+                    translationTimeout = setTimeout(() => {
+                        currentTranscript = displayText;
+                        translateText(displayText, !!finalTranscript); // Save to history only if final
+                    }, 300);
                 }
             };
 
@@ -761,9 +1002,7 @@
                 if (event.error === 'not-allowed') {
                     showError('🚫 Microphone access denied. Please allow microphone access and refresh the page.');
                 } else if (event.error === 'no-speech') {
-                    updateStatus('🔇 No speech detected. Try speaking louder or closer to the microphone.');
-                } else if (event.error === 'audio-capture') {
-                    showError('🎤 No microphone found. Please connect a microphone and try again.');
+                    updateStatus('🔇 No speech detected. Try speaking louder.');
                 } else {
                     updateStatus(`❌ Error: ${event.error}. Please try again.`);
                 }
@@ -792,42 +1031,11 @@
             return true;
         }
 
-        function startListening() {
-            if (!translator) {
-                showError('AI translation model not loaded. Please wait for it to load or refresh the page.');
-                return;
-            }
-
-            const sourceLang = document.getElementById('sourceLang').value;
-            
-            if (!recognition && !initSpeechRecognition()) {
-                return;
-            }
-
-            recognition.lang = sourceLang;
-            
-            try {
-                recognition.start();
-                isListening = true;
-                
-                const button = document.getElementById('controlButton');
-                button.innerHTML = '<div class="mic-icon">🛑</div><div>Stop</div>';
-                button.classList.remove('start');
-                button.classList.add('stop', 'listening');
-                
-                document.getElementById('originalText').textContent = 'Listening...';
-                document.getElementById('translatedText').textContent = 'Speak now and see real-time AI translation';
-                
-            } catch (e) {
-                console.error('Failed to start recognition:', e);
-                showError('🚫 Failed to start voice recognition. Please ensure microphone access is allowed.');
-            }
-        }
-
         function stopListening() {
             if (recognition) {
                 recognition.stop();
             }
+            
             isListening = false;
             
             // Cancel any ongoing speech
@@ -874,7 +1082,9 @@
                 const result = await translator(text, {
                     src_lang: srcLang,
                     tgt_lang: tgtLang,
-                    max_length: 200
+                    max_length: 100,  // Shorter max length for faster processing
+                    num_beams: 1,     // Greedy decoding for speed
+                    early_stopping: true
                 });
                 
                 const translatedText = result[0].translation_text;
@@ -1029,15 +1239,15 @@
             }
             
             // Set initial ready state
-            document.getElementById('translatedText').textContent = 'Loading AI translation model...';
-            updateStatus('🤖 Loading AI translation model...');
+            document.getElementById('translatedText').textContent = 'Loading AI models...';
+            updateStatus('🤖 Loading AI models...');
             
-            // Initialize AI translation model
-            await initTranslationModel();
+            // Initialize AI models
+            await initModels();
             
-            if (translator) {
-                document.getElementById('translatedText').textContent = 'Real-time AI translation ready';
-                updateStatus('🎤 Ready! Click Start to begin voice translation');
+            if (translator && whisperModel) {
+                document.getElementById('translatedText').textContent = 'AI speech translation ready';
+                updateStatus('🎤 Ready! Click Start to record and translate speech');
             }
             
             // Check for microphone support
@@ -1048,8 +1258,8 @@
                 navigator.mediaDevices.getUserMedia({ audio: true })
                     .then((stream) => {
                         console.log('✅ Microphone access granted');
-                        if (translator) {
-                            updateStatus('🎤 Ready! Click Start to begin voice translation');
+                        if (translator && whisperModel) {
+                            updateStatus('🎤 Ready! Click Start to record and translate speech');
                         }
                         
                         // Stop the stream since we just needed permission
